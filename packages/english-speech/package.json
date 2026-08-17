@@ -1,0 +1,31 @@
+{
+  "name": "@suwujin-code/dsh-english-speech",
+  "version": "0.1.0",
+  "description": "A browser-only DeepSeek Harness plugin that adds click-to-play English speech to finalized assistant messages.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": { "types": "./lib/types/index.d.ts", "default": "./lib/index.js" },
+    "./client": { "types": "./lib/types/client/index.d.ts", "default": "./lib/client.js" },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": ["@deepseek-ai/dsh-client-runtime", "@deepseek-ai/dsh-client-ui-conversation", "@deepseek-ai/dsh-client-ui-primitives"],
+      "platform": "web"
+    }
+  },
+  "files": ["lib", "README.md", "LICENSE"],
+  "keywords": ["deepseek", "dsh", "harness", "tts", "speechsynthesis", "english", "accessibility"],
+  "peerDependencies": {
+    "@deepseek-ai/dsh": ">=0.1.0-rc.6",
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
+    "react": "^18.2.0"
+  }
+}

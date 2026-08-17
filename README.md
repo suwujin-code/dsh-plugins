@@ -7,6 +7,7 @@ Public, versioned plugin presets for [DeepSeek Harness (DSH)](https://github.com
 | Package | Status | Purpose |
 | --- | --- | --- |
 | [@suwujin-code/dsh-clickable-choices](packages/clickable-choices) | v0.1.0 | Makes an agent prefer DSH built-in clickable choice cards for structured decisions. |
+| [@suwujin-code/dsh-english-speech](packages/english-speech) | v0.1.0 | Adds browser-native click-to-play English reading controls to finalized assistant replies. |
 
 ## Scope
 
