@@ -1,0 +1,9 @@
+{
+  "name": "@suwujin-code/dsh-clickable-choices",
+  "version": "0.1.0",
+  "description": "A DeepSeek Harness agent preset that prefers built-in clickable choices for structured user decisions.",
+  "license": "MIT",
+  "keywords": ["deepseek", "dsh", "harness", "plugin", "choices", "ask-user-question"],
+  "files": ["preset", "prompts", "README.md", "package.json"],
+  "peerDependencies": { "@deepseek-ai/dsh": ">=0.1.0-rc.6" }
+}

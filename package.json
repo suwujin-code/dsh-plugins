@@ -1,0 +1,14 @@
+{
+  "name": "dsh-plugins",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Public, versioned DeepSeek Harness plugin presets maintained by suwujin-code.",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "validate": "npm run test",
+    "pack:clickable-choices": "npm pack --workspace @suwujin-code/dsh-clickable-choices"
+  },
+  "workspaces": ["packages/*"]
+}
