@@ -8,3 +8,4 @@ All notable changes to this repository are documented here.
 - Initial public DSH plugin repository.
 - @suwujin-code/dsh-clickable-choices preset package.
 - Policy and examples for single choice, multi-choice, and explicit confirmations.
+- Explicit clone-and-merge installation instructions for the initial policy-preset format.

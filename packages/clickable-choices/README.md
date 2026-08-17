@@ -14,7 +14,10 @@ Without a policy, an agent may write “reply 1/2/3” in ordinary chat. With th
 
 ## Apply the preset
 
-Copy clickable-choice-policy from [preset/agent.cordis.yml](preset/agent.cordis.yml) into the agent Cordis composition after its main persona entry. Keep or add tool-ask-user, then restart the affected DSH profile. Profile changes are not hot-loaded by an already-running Web process.
+1. Clone a released tag of this repository: `git clone --branch v0.1.0 --depth 1 https://github.com/suwujin-code/dsh-plugins.git`.
+2. Copy `clickable-choice-policy` from [preset/agent.cordis.yml](preset/agent.cordis.yml) into the target agent Cordis composition after its main persona entry.
+3. Keep or add the `tool-ask-user` entry shown below.
+4. Restart the affected DSH profile. Profile changes are not hot-loaded by an already-running Web process.
 
 ## Non-goals
 

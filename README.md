@@ -14,11 +14,11 @@ DSH already provides the Web choice UI and the ask_user_question tool. This repo
 
 ## Install
 
-Install this repository into the target DSH profile with a released tag:
+Clone a released version of this repository, then merge the desired preset overlay into the target agent Cordis composition:
 
-    dsh plugin --profile web add github:suwujin-code/dsh-plugins#v0.1.0
+    git clone --branch v0.1.0 --depth 1 https://github.com/suwujin-code/dsh-plugins.git
 
-Then add the package preset overlay to the target agent Cordis composition. See the package README for the exact configuration. Restart the DSH Web process after profile configuration changes.
+The initial package is a policy preset rather than executable code: copy the `clickable-choice-policy` entry from `packages/clickable-choices/preset/agent.cordis.yml`, and make sure the target agent exposes `@deepseek-ai/dsh-tool-ask-user`. See the package README for details. Restart the DSH Web process after profile configuration changes.
 
 ## Release process
 
