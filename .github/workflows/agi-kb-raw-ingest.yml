@@ -1,0 +1,84 @@
+name: AGI KB RAW Ingest
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/agi-kb-raw-ingest.yml
+
+permissions:
+  contents: read
+
+jobs:
+  ingest-p0-pdf-batch-01:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download and verify official PDF sources
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p raw logs
+          cat > sources.tsv <<'EOF'
+          1	01	01_IEEE_SWEBOK_v4.0a.pdf	https://ieeecs-media.computer.org/media/education/swebok/swebok-v4.pdf
+          13	03	13_ReAct_2210.03629.pdf	https://arxiv.org/pdf/2210.03629.pdf
+          14	03	14_Reflexion_2303.11366.pdf	https://arxiv.org/pdf/2303.11366.pdf
+          15	06	15_MemGPT_2310.08560.pdf	https://arxiv.org/pdf/2310.08560.pdf
+          16	08	16_AI_Agents_That_Matter_2407.01502.pdf	https://arxiv.org/pdf/2407.01502.pdf
+          17	03	17_Multi_Agent_Failure_Taxonomy_2503.13657.pdf	https://arxiv.org/pdf/2503.13657.pdf
+          34	09	34_NIST_AI_RMF_1.0.pdf	https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf
+          41	12	41_Levels_of_AGI_2311.02462.pdf	https://arxiv.org/pdf/2311.02462.pdf
+          42	12	42_AGI_Cognitive_Framework_2605.28405.pdf	https://arxiv.org/pdf/2605.28405.pdf
+          46	09	46_Practices_for_Governing_Agentic_AI_Systems.pdf	https://cdn.openai.com/papers/practices-for-governing-agentic-ai-systems.pdf
+          47	11	47_GAIA_Benchmark_2311.12983.pdf	https://arxiv.org/pdf/2311.12983.pdf
+          EOF
+
+          printf 'id,module,filename,url,status,bytes,sha256,error\n' > logs/download_manifest.csv
+          : > logs/failures.log
+          success=0
+          failed=0
+
+          while IFS=$'\t' read -r id module filename url; do
+            dest="raw/${module}/${filename}"
+            tmp="${dest}.part"
+            mkdir -p "$(dirname "$dest")"
+            echo "Downloading ${id} ${filename}"
+            if curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 900 \
+                 --user-agent 'Mozilla/5.0 AGI-KB-Archiver/1.0' "$url" --output "$tmp"; then
+              bytes="$(stat -c%s "$tmp")"
+              magic="$(head -c 5 "$tmp" || true)"
+              if [[ "$magic" == '%PDF-' && "$bytes" -gt 10000 ]]; then
+                mv "$tmp" "$dest"
+                sha="$(sha256sum "$dest" | awk '{print $1}')"
+                printf '%s,%s,%s,%s,RAW_DOWNLOADED,%s,%s,\n' "$id" "$module" "$filename" "$url" "$bytes" "$sha" >> logs/download_manifest.csv
+                success=$((success+1))
+              else
+                rm -f "$tmp"
+                printf '%s,%s,%s,%s,FAILED_VALIDATION,%s,,not_pdf_or_too_small\n' "$id" "$module" "$filename" "$url" "$bytes" >> logs/download_manifest.csv
+                echo "${id} ${filename}: invalid PDF magic/size" >> logs/failures.log
+                failed=$((failed+1))
+              fi
+            else
+              rc=$?
+              rm -f "$tmp"
+              printf '%s,%s,%s,%s,FAILED_DOWNLOAD,0,,curl_exit_%s\n' "$id" "$module" "$filename" "$url" "$rc" >> logs/download_manifest.csv
+              echo "${id} ${filename}: curl exit ${rc}" >> logs/failures.log
+              failed=$((failed+1))
+            fi
+          done < sources.tsv
+
+          find raw -type f -print0 | sort -z | xargs -0 -r sha256sum > logs/SHA256SUMS.txt
+          printf '{"batch":"p0-pdf-batch-01","success":%s,"failed":%s,"generated_at":"%s"}\n' \
+            "$success" "$failed" "$(date -u +%FT%TZ)" > logs/summary.json
+          cat logs/summary.json
+
+      - name: Upload verified raw sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-agent-p0-pdf-batch-01
+          path: |
+            raw/
+            logs/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
