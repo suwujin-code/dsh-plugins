@@ -10,157 +10,48 @@ permissions:
   contents: read
 
 jobs:
-  archive-p0-official-web-sources:
-    strategy:
-      fail-fast: false
-      max-parallel: 5
-      matrix:
-        include:
-          - {id: '3', module: '01', slug: 'Google_SRE_Books', url: 'https://sre.google/books/'}
-          - {id: '4', module: '01', slug: 'Twelve_Factor_App', url: 'https://12factor.net/'}
-          - {id: '5', module: '01', slug: 'C4_Model', url: 'https://c4model.com/'}
-          - {id: '9', module: '02', slug: 'OpenAI_Practical_Guide_Building_Agents', url: 'https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/'}
-          - {id: '10', module: '02', slug: 'Anthropic_Building_Effective_Agents', url: 'https://www.anthropic.com/engineering/building-effective-agents'}
-          - {id: '11', module: '02', slug: 'Anthropic_Writing_Effective_Tools', url: 'https://www.anthropic.com/engineering/writing-tools-for-agents'}
-          - {id: '12', module: '02', slug: 'Anthropic_Context_Engineering', url: 'https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents'}
-          - {id: '31', module: '09', slug: 'OWASP_Agentic_Top10_2026', url: 'https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/'}
-          - {id: '32', module: '09', slug: 'OWASP_GenAI_LLM_Top10_2026', url: 'https://genai.owasp.org/'}
-          - {id: '33', module: '09', slug: 'OWASP_Securing_Agentic_Applications_Guide_1.0', url: 'https://genai.owasp.org/resource/securing-agentic-applications-guide-1-0/'}
-          - {id: '36', module: '08', slug: 'Anthropic_Demystifying_Agent_Evals', url: 'https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents'}
-          - {id: '37', module: '08', slug: 'OpenAI_Agent_Evals_Trace_Grading', url: 'https://developers.openai.com/api/docs/guides/agent-evals'}
-          - {id: '43', module: '12', slug: 'International_AI_Safety_Report_2026', url: 'https://internationalaisafetyreport.org/publication/international-ai-safety-report-2026'}
-          - {id: '44', module: '09', slug: 'OpenAI_Preparedness_Framework_v2', url: 'https://openai.com/index/updating-our-preparedness-framework/'}
-          - {id: '45', module: '09', slug: 'DeepMind_Frontier_Safety_Framework_v3.1', url: 'https://deepmind.google/frontier-safety/'}
+  ingest-openai-official-pdfs:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 30
     steps:
-      - name: Capture raw HTTP, rendered DOM, print PDF, and linked official PDFs
+      - name: Download and verify official OpenAI PDFs
         shell: bash
-        env:
-          SOURCE_ID: ${{ matrix.id }}
-          MODULE: ${{ matrix.module }}
-          SLUG: ${{ matrix.slug }}
-          SOURCE_URL: ${{ matrix.url }}
         run: |
           set -uo pipefail
-          root="capture/${SOURCE_ID}_${SLUG}"
-          mkdir -p "$root/raw" "$root/rendered" "$root/discovered_pdfs" "$root/meta" payload
-          printf '%s\n' "$SOURCE_URL" > "$root/meta/source_url.txt"
-          printf 'source_id,module,slug,url,status,http_code,final_url,raw_bytes,rendered_dom_bytes,rendered_pdf_bytes,linked_pdf_count,bundle_bytes,bundle_sha256,error\n' > "$root/meta/capture_manifest.csv"
-
-          raw_status='FAILED'
-          http_code='000'
-          final_url=''
-          error=''
-          curl_meta="$(curl --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \
-             --user-agent 'Mozilla/5.0 AGI-KB-Archiver/1.0' \
-             --dump-header "$root/raw/response_headers.txt" \
-             --output "$root/raw/raw_response.bin" \
-             --write-out '%{http_code}\t%{url_effective}' "$SOURCE_URL" 2>"$root/meta/curl_error.log" || true)"
-          http_code="${curl_meta%%$'\t'*}"
-          final_url="${curl_meta#*$'\t'}"
-          raw_bytes="$(stat -c%s "$root/raw/raw_response.bin" 2>/dev/null || echo 0)"
-          if [[ "$raw_bytes" -gt 500 ]]; then
-            raw_status='PASS'
-            mime="$(file -b --mime-type "$root/raw/raw_response.bin" || true)"
-            printf '%s\n' "$mime" > "$root/meta/raw_mime.txt"
-            case "$mime" in
-              text/*|application/json|application/xml|application/xhtml+xml)
-                mv "$root/raw/raw_response.bin" "$root/raw/raw_response.html" ;;
-              application/pdf)
-                mv "$root/raw/raw_response.bin" "$root/raw/raw_response.pdf" ;;
-            esac
-          else
-            error='raw_http_capture_failed_or_too_small'
-          fi
-
-          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
-          rendered_dom_bytes=0
-          rendered_pdf_bytes=0
-          if [[ -n "$browser" ]]; then
-            printf '%s\n' "$browser" > "$root/meta/browser_path.txt"
-            timeout 180 "$browser" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
-              --hide-scrollbars --virtual-time-budget=20000 --dump-dom "$SOURCE_URL" \
-              > "$root/rendered/rendered_dom.html" 2>"$root/meta/browser_dom_error.log" || true
-            timeout 240 "$browser" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
-              --hide-scrollbars --virtual-time-budget=20000 --print-to-pdf="$root/rendered/rendered_page.pdf" "$SOURCE_URL" \
-              > "$root/meta/browser_pdf_stdout.log" 2>"$root/meta/browser_pdf_error.log" || true
-            rendered_dom_bytes="$(stat -c%s "$root/rendered/rendered_dom.html" 2>/dev/null || echo 0)"
-            rendered_pdf_bytes="$(stat -c%s "$root/rendered/rendered_page.pdf" 2>/dev/null || echo 0)"
-            if [[ "$rendered_pdf_bytes" -gt 0 && "$(head -c 5 "$root/rendered/rendered_page.pdf" || true)" != '%PDF-' ]]; then
-              rm -f "$root/rendered/rendered_page.pdf"; rendered_pdf_bytes=0
-            fi
-          else
-            printf 'browser_not_found\n' > "$root/meta/browser_error.log"
-          fi
-
-          python - "$SOURCE_URL" "$root" <<'PY'
-          import html.parser, pathlib, sys, urllib.parse
-          base=sys.argv[1]; root=pathlib.Path(sys.argv[2])
-          urls=[]
-          class P(html.parser.HTMLParser):
-              def handle_starttag(self, tag, attrs):
-                  for k,v in attrs:
-                      if k.lower() in {'href','src'} and v:
-                          u=urllib.parse.urljoin(base,v)
-                          path=urllib.parse.urlparse(u).path.lower()
-                          if path.endswith('.pdf') or '.pdf/' in path:
-                              urls.append(u)
-          for p in [root/'raw/raw_response.html', root/'rendered/rendered_dom.html']:
-              if p.exists():
-                  try: P().feed(p.read_text(encoding='utf-8',errors='ignore'))
-                  except Exception: pass
-          seen=[]
-          for u in urls:
-              if u not in seen: seen.append(u)
-          (root/'meta/discovered_pdf_urls.txt').write_text('\n'.join(seen[:10])+('\n' if seen else ''),encoding='utf-8')
-          PY
-
-          printf 'index,url,status,bytes,sha256,file\n' > "$root/meta/discovered_pdf_manifest.csv"
-          linked_pdf_count=0
-          idx=0
-          while IFS= read -r pdf_url; do
-            [[ -n "$pdf_url" ]] || continue
-            idx=$((idx+1)); [[ "$idx" -le 5 ]] || break
-            dest="$root/discovered_pdfs/linked_${idx}.pdf"; tmp="${dest}.part"
-            if curl --fail --location --retry 4 --retry-all-errors --connect-timeout 30 --max-time 900 \
-                 --user-agent 'Mozilla/5.0 AGI-KB-Archiver/1.0' "$pdf_url" --output "$tmp" 2>>"$root/meta/linked_pdf_errors.log"; then
+          mkdir -p raw/02 raw/09 logs
+          cat > sources.tsv <<'EOF'
+          9	02	09_OpenAI_A_Practical_Guide_to_Building_Agents.pdf	https://cdn.openai.com/business-guides-and-resources/a-practical-guide-to-building-agents.pdf
+          44	09	44_OpenAI_Preparedness_Framework_v2.pdf	https://cdn.openai.com/pdf/18a02b5d-6b67-4cec-ab64-68cdfbddebcd/preparedness-framework-v2.pdf
+          EOF
+          printf 'id,module,filename,url,status,bytes,sha256,error\n' > logs/download_manifest.csv
+          success=0; failed=0
+          while IFS=$'\t' read -r id module filename url; do
+            dest="raw/${module}/${filename}"; tmp="${dest}.part"
+            if curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 900 \
+                 --user-agent 'Mozilla/5.0 AGI-KB-Archiver/1.0' "$url" --output "$tmp"; then
               bytes="$(stat -c%s "$tmp")"
               if [[ "$(head -c 5 "$tmp" || true)" == '%PDF-' && "$bytes" -gt 10000 ]]; then
                 mv "$tmp" "$dest"; digest="$(sha256sum "$dest" | awk '{print $1}')"
-                printf '%s,%s,RAW_DOWNLOADED,%s,%s,%s\n' "$idx" "$pdf_url" "$bytes" "$digest" "$(basename "$dest")" >> "$root/meta/discovered_pdf_manifest.csv"
-                linked_pdf_count=$((linked_pdf_count+1))
+                printf '%s,%s,%s,%s,RAW_DOWNLOADED,%s,%s,\n' "$id" "$module" "$filename" "$url" "$bytes" "$digest" >> logs/download_manifest.csv
+                success=$((success+1))
               else
-                rm -f "$tmp"; printf '%s,%s,FAILED_VALIDATION,%s,,\n' "$idx" "$pdf_url" "$bytes" >> "$root/meta/discovered_pdf_manifest.csv"
+                rm -f "$tmp"; printf '%s,%s,%s,%s,FAILED_VALIDATION,%s,,not_pdf_or_too_small\n' "$id" "$module" "$filename" "$url" "$bytes" >> logs/download_manifest.csv; failed=$((failed+1))
               fi
             else
-              rm -f "$tmp"; printf '%s,%s,FAILED_DOWNLOAD,0,,\n' "$idx" "$pdf_url" >> "$root/meta/discovered_pdf_manifest.csv"
+              rc=$?; rm -f "$tmp"; printf '%s,%s,%s,%s,FAILED_DOWNLOAD,0,,curl_exit_%s\n' "$id" "$module" "$filename" "$url" "$rc" >> logs/download_manifest.csv; failed=$((failed+1))
             fi
-          done < "$root/meta/discovered_pdf_urls.txt"
+          done < sources.tsv
+          find raw -type f -print0 | sort -z | xargs -0 -r sha256sum > logs/SHA256SUMS.txt
+          printf '{"batch":"openai-official-pdf-repair","success":%s,"failed":%s,"generated_at":"%s"}\n' "$success" "$failed" "$(date -u +%FT%TZ)" > logs/summary.json
+          cat logs/download_manifest.csv
 
-          find "$root" -type f ! -name 'SHA256SUMS.txt' -print0 | sort -z | xargs -0 -r sha256sum > "$root/meta/SHA256SUMS.txt"
-          if [[ "$raw_status" == 'PASS' || "$rendered_dom_bytes" -gt 1000 || "$rendered_pdf_bytes" -gt 10000 || "$linked_pdf_count" -gt 0 ]]; then
-            status='RAW_DOWNLOADED'
-          else
-            status='FAILED_CAPTURE'
-          fi
-          bundle="payload/${SOURCE_ID}_${SLUG}_OFFICIAL_WEB_SNAPSHOT.zip"
-          zip -qr "$bundle" "$root"
-          unzip -tq "$bundle" >/dev/null
-          bundle_bytes="$(stat -c%s "$bundle")"
-          bundle_sha="$(sha256sum "$bundle" | awk '{print $1}')"
-          printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
-            "$SOURCE_ID" "$MODULE" "$SLUG" "$SOURCE_URL" "$status" "$http_code" "$final_url" "$raw_bytes" "$rendered_dom_bytes" "$rendered_pdf_bytes" "$linked_pdf_count" "$bundle_bytes" "$bundle_sha" "$error" >> "$root/meta/capture_manifest.csv"
-          cp "$root/meta/capture_manifest.csv" payload/
-          cp "$root/meta/SHA256SUMS.txt" payload/${SOURCE_ID}_${SLUG}_INNER_SHA256SUMS.txt
-          printf '%s  %s\n' "$bundle_sha" "$(basename "$bundle")" > payload/${SOURCE_ID}_${SLUG}_BUNDLE_SHA256.txt
-          cat "$root/meta/capture_manifest.csv"
-
-      - name: Upload official source snapshot
+      - name: Upload verified OpenAI PDFs
         uses: actions/upload-artifact@v4
         with:
-          name: agi-kb-web-${{ matrix.id }}-${{ matrix.slug }}
-          path: payload/
+          name: agi-agent-openai-official-pdf-repair
+          path: |
+            raw/
+            logs/
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
