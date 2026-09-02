@@ -10,48 +10,85 @@ permissions:
   contents: read
 
 jobs:
-  ingest-openai-official-pdfs:
+  ingest-p1-repositories:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {id: '48', module: '11', component: 'WebArena', repository: 'web-arena-x/webarena'}
+          - {id: '49', module: '11', component: 'OSWorld_V2', repository: 'xlang-ai/OSWorld-V2'}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Resolve immutable commit and verify archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p payload meta
+          repo='${{ matrix.repository }}'
+          branch="$(curl -fsSL --retry 5 --retry-all-errors --user-agent 'AGI-KB-Archiver/1.0' "https://api.github.com/repos/${repo}" | jq -r '.default_branch')"
+          commit_sha="$(curl -fsSL --retry 5 --retry-all-errors --user-agent 'AGI-KB-Archiver/1.0' "https://api.github.com/repos/${repo}/commits/${branch}" | jq -r '.sha')"
+          short="${commit_sha:0:12}"
+          filename='${{ matrix.id }}_${{ matrix.component }}_'"${short}.zip"
+          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 1800 --user-agent 'AGI-KB-Archiver/1.0' \
+            "https://codeload.github.com/${repo}/zip/${commit_sha}" --output "payload/${filename}"
+          bytes="$(stat -c%s "payload/${filename}")"
+          [[ "$(head -c 2 "payload/${filename}")" == 'PK' ]]
+          [[ "$bytes" -gt 1000 ]]
+          unzip -tq "payload/${filename}" >/dev/null
+          digest="$(sha256sum "payload/${filename}" | awk '{print $1}')"
+          printf '%s  %s\n' "$digest" "$filename" > meta/SHA256SUMS.txt
+          printf '{"id":"%s","module":"%s","component":"%s","repository":"%s","default_branch":"%s","commit_sha":"%s","filename":"%s","bytes":%s,"sha256":"%s","status":"RAW_DOWNLOADED"}\n' \
+            '${{ matrix.id }}' '${{ matrix.module }}' '${{ matrix.component }}' "$repo" "$branch" "$commit_sha" "$filename" "$bytes" "$digest" > meta/manifest.json
+      - name: Upload P1 repository snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-p1-${{ matrix.id }}-${{ matrix.component }}
+          path: |
+            payload/
+            meta/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  archive-p1-bfcl:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Download and verify official OpenAI PDFs
+      - name: Capture BFCL leaderboard source
         shell: bash
         run: |
           set -uo pipefail
-          mkdir -p raw/02 raw/09 logs
-          cat > sources.tsv <<'EOF'
-          9	02	09_OpenAI_A_Practical_Guide_to_Building_Agents.pdf	https://cdn.openai.com/business-guides-and-resources/a-practical-guide-to-building-agents.pdf
-          44	09	44_OpenAI_Preparedness_Framework_v2.pdf	https://cdn.openai.com/pdf/18a02b5d-6b67-4cec-ab64-68cdfbddebcd/preparedness-framework-v2.pdf
-          EOF
-          printf 'id,module,filename,url,status,bytes,sha256,error\n' > logs/download_manifest.csv
-          success=0; failed=0
-          while IFS=$'\t' read -r id module filename url; do
-            dest="raw/${module}/${filename}"; tmp="${dest}.part"
-            if curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 900 \
-                 --user-agent 'Mozilla/5.0 AGI-KB-Archiver/1.0' "$url" --output "$tmp"; then
-              bytes="$(stat -c%s "$tmp")"
-              if [[ "$(head -c 5 "$tmp" || true)" == '%PDF-' && "$bytes" -gt 10000 ]]; then
-                mv "$tmp" "$dest"; digest="$(sha256sum "$dest" | awk '{print $1}')"
-                printf '%s,%s,%s,%s,RAW_DOWNLOADED,%s,%s,\n' "$id" "$module" "$filename" "$url" "$bytes" "$digest" >> logs/download_manifest.csv
-                success=$((success+1))
-              else
-                rm -f "$tmp"; printf '%s,%s,%s,%s,FAILED_VALIDATION,%s,,not_pdf_or_too_small\n' "$id" "$module" "$filename" "$url" "$bytes" >> logs/download_manifest.csv; failed=$((failed+1))
-              fi
-            else
-              rc=$?; rm -f "$tmp"; printf '%s,%s,%s,%s,FAILED_DOWNLOAD,0,,curl_exit_%s\n' "$id" "$module" "$filename" "$url" "$rc" >> logs/download_manifest.csv; failed=$((failed+1))
-            fi
-          done < sources.tsv
-          find raw -type f -print0 | sort -z | xargs -0 -r sha256sum > logs/SHA256SUMS.txt
-          printf '{"batch":"openai-official-pdf-repair","success":%s,"failed":%s,"generated_at":"%s"}\n' "$success" "$failed" "$(date -u +%FT%TZ)" > logs/summary.json
-          cat logs/download_manifest.csv
-
-      - name: Upload verified OpenAI PDFs
+          id='51'; module='11'; slug='BFCL_V4_Leaderboard'; url='https://gorilla.cs.berkeley.edu/leaderboard.html'
+          root="capture/${id}_${slug}"
+          mkdir -p "$root/raw" "$root/rendered" "$root/meta" payload
+          curl_meta="$(curl --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \
+            --user-agent 'Mozilla/5.0 AGI-KB-Archiver/1.0' --dump-header "$root/raw/response_headers.txt" \
+            --output "$root/raw/raw_response.html" --write-out '%{http_code}\t%{url_effective}' "$url" 2>"$root/meta/curl_error.log" || true)"
+          http_code="${curl_meta%%$'\t'*}"; final_url="${curl_meta#*$'\t'}"
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          if [[ -n "$browser" ]]; then
+            timeout 180 "$browser" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --virtual-time-budget=20000 --dump-dom "$url" > "$root/rendered/rendered_dom.html" 2>"$root/meta/browser_dom_error.log" || true
+            timeout 240 "$browser" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --virtual-time-budget=20000 --print-to-pdf="$root/rendered/rendered_page.pdf" "$url" > "$root/meta/browser_pdf_stdout.log" 2>"$root/meta/browser_pdf_error.log" || true
+          fi
+          raw_bytes="$(stat -c%s "$root/raw/raw_response.html" 2>/dev/null || echo 0)"
+          dom_bytes="$(stat -c%s "$root/rendered/rendered_dom.html" 2>/dev/null || echo 0)"
+          pdf_bytes="$(stat -c%s "$root/rendered/rendered_page.pdf" 2>/dev/null || echo 0)"
+          if [[ "$pdf_bytes" -gt 0 && "$(head -c 5 "$root/rendered/rendered_page.pdf" || true)" != '%PDF-' ]]; then rm -f "$root/rendered/rendered_page.pdf"; pdf_bytes=0; fi
+          if [[ "$http_code" == '200' && ( "$raw_bytes" -gt 500 || "$dom_bytes" -gt 1000 || "$pdf_bytes" -gt 10000 ) ]]; then status='RAW_DOWNLOADED'; else status='FAILED_CAPTURE'; fi
+          find "$root" -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 -r sha256sum > "$root/meta/SHA256SUMS.txt"
+          bundle="payload/${id}_${slug}_OFFICIAL_WEB_SNAPSHOT.zip"
+          zip -qr "$bundle" "$root"; unzip -tq "$bundle" >/dev/null
+          bytes="$(stat -c%s "$bundle")"; digest="$(sha256sum "$bundle" | awk '{print $1}')"
+          printf 'id,module,slug,url,status,http_code,final_url,raw_bytes,rendered_dom_bytes,rendered_pdf_bytes,bundle_bytes,bundle_sha256\n' > payload/capture_manifest.csv
+          printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$id" "$module" "$slug" "$url" "$status" "$http_code" "$final_url" "$raw_bytes" "$dom_bytes" "$pdf_bytes" "$bytes" "$digest" >> payload/capture_manifest.csv
+          printf '%s  %s\n' "$digest" "$(basename "$bundle")" > payload/BUNDLE_SHA256.txt
+          cat payload/capture_manifest.csv
+      - name: Upload BFCL official web snapshot
         uses: actions/upload-artifact@v4
         with:
-          name: agi-agent-openai-official-pdf-repair
-          path: |
-            raw/
-            logs/
+          name: agi-kb-p1-51-BFCL_V4_Leaderboard
+          path: payload/
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
