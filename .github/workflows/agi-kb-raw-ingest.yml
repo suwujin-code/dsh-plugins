@@ -10,55 +10,45 @@ permissions:
   contents: read
 
 jobs:
-  ingest-p0-repository-batch-03:
+  ingest-p0-standard-repository-batch-04:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 60
     steps:
-      - name: Resolve commits and download coding-agent repository snapshots
+      - name: Resolve commits and download standards repositories
         shell: bash
         run: |
           set -uo pipefail
           mkdir -p raw logs
           cat > repositories.tsv <<'EOF'
-          29	07	Temporal_Documentation	temporalio/documentation
-          30	06	LlamaIndex	run-llama/llama_index
-          38	10	SWE_Agent	SWE-agent/SWE-agent
-          39	10	OpenHands	OpenHands/OpenHands
-          40	11	SWE_Bench	SWE-bench/SWE-bench
-          50	11	Terminal_Bench	harbor-framework/terminal-bench
-          52	10	Mini_SWE_Agent	SWE-agent/mini-swe-agent
+          2	01	Google_Engineering_Practices	google/eng-practices
+          6	01	OpenAPI_Specification	OAI/OpenAPI-Specification
+          7	01	JSON_Schema_Specification	json-schema-org/json-schema-spec
+          8	08	OpenTelemetry_Semantic_Conventions	open-telemetry/semantic-conventions
+          21	04	AGENTS_md	agentsmd/agents.md
+          35	09	MITRE_ATLAS_Data	mitre-atlas/atlas-data
           EOF
 
           printf 'id,module,component,repository,default_branch,commit_sha,filename,status,bytes,sha256,error\n' > logs/repository_manifest.csv
           : > logs/failures.log
-          success=0
-          failed=0
-
+          success=0; failed=0
           while IFS=$'\t' read -r id module component repository; do
             meta="$(curl --fail --silent --show-error --location --retry 5 --retry-all-errors --user-agent 'AGI-KB-Archiver/1.0' "https://api.github.com/repos/${repository}" 2>>logs/failures.log || true)"
             branch="$(printf '%s' "$meta" | jq -r '.default_branch // empty' 2>/dev/null || true)"
             if [[ -z "$branch" ]]; then
-              printf '%s,%s,%s,%s,,,,FAILED_RESOLVE,0,,default_branch_missing\n' "$id" "$module" "$component" "$repository" >> logs/repository_manifest.csv
-              failed=$((failed+1)); continue
+              printf '%s,%s,%s,%s,,,,FAILED_RESOLVE,0,,default_branch_missing\n' "$id" "$module" "$component" "$repository" >> logs/repository_manifest.csv; failed=$((failed+1)); continue
             fi
             commit_json="$(curl --fail --silent --show-error --location --retry 5 --retry-all-errors --user-agent 'AGI-KB-Archiver/1.0' "https://api.github.com/repos/${repository}/commits/${branch}" 2>>logs/failures.log || true)"
             commit_sha="$(printf '%s' "$commit_json" | jq -r '.sha // empty' 2>/dev/null || true)"
             if [[ -z "$commit_sha" ]]; then
-              printf '%s,%s,%s,%s,%s,,,FAILED_RESOLVE,0,,commit_sha_missing\n' "$id" "$module" "$component" "$repository" "$branch" >> logs/repository_manifest.csv
-              failed=$((failed+1)); continue
+              printf '%s,%s,%s,%s,%s,,,FAILED_RESOLVE,0,,commit_sha_missing\n' "$id" "$module" "$component" "$repository" "$branch" >> logs/repository_manifest.csv; failed=$((failed+1)); continue
             fi
-            short="${commit_sha:0:12}"
-            filename="${id}_${component}_${short}.zip"
-            dest="raw/${module}/${filename}"
-            tmp="${dest}.part"
-            mkdir -p "$(dirname "$dest")"
+            short="${commit_sha:0:12}"; filename="${id}_${component}_${short}.zip"; dest="raw/${module}/${filename}"; tmp="${dest}.part"; mkdir -p "$(dirname "$dest")"
             url="https://codeload.github.com/${repository}/zip/${commit_sha}"
-            if curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 2400 --user-agent 'AGI-KB-Archiver/1.0' "$url" --output "$tmp"; then
+            if curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 1800 --user-agent 'AGI-KB-Archiver/1.0' "$url" --output "$tmp"; then
               bytes="$(stat -c%s "$tmp")"; magic="$(head -c 2 "$tmp" || true)"
               if [[ "$magic" == 'PK' && "$bytes" -gt 1000 ]] && unzip -tq "$tmp" >/dev/null 2>&1; then
                 mv "$tmp" "$dest"; digest="$(sha256sum "$dest" | awk '{print $1}')"
-                printf '%s,%s,%s,%s,%s,%s,%s,RAW_DOWNLOADED,%s,%s,\n' "$id" "$module" "$component" "$repository" "$branch" "$commit_sha" "$filename" "$bytes" "$digest" >> logs/repository_manifest.csv
-                success=$((success+1))
+                printf '%s,%s,%s,%s,%s,%s,%s,RAW_DOWNLOADED,%s,%s,\n' "$id" "$module" "$component" "$repository" "$branch" "$commit_sha" "$filename" "$bytes" "$digest" >> logs/repository_manifest.csv; success=$((success+1))
               else
                 rm -f "$tmp"; printf '%s,%s,%s,%s,%s,%s,%s,FAILED_VALIDATION,%s,,invalid_or_corrupt_zip\n' "$id" "$module" "$component" "$repository" "$branch" "$commit_sha" "$filename" "$bytes" >> logs/repository_manifest.csv; failed=$((failed+1))
               fi
@@ -66,15 +56,14 @@ jobs:
               rc=$?; rm -f "$tmp"; printf '%s,%s,%s,%s,%s,%s,%s,FAILED_DOWNLOAD,0,,curl_exit_%s\n' "$id" "$module" "$component" "$repository" "$branch" "$commit_sha" "$filename" "$rc" >> logs/repository_manifest.csv; failed=$((failed+1))
             fi
           done < repositories.tsv
-
           find raw -type f -print0 | sort -z | xargs -0 -r sha256sum > logs/SHA256SUMS.txt
-          printf '{"batch":"p0-repository-batch-03","successful_components":%s,"failed_components":%s,"generated_at":"%s"}\n' "$success" "$failed" "$(date -u +%FT%TZ)" > logs/summary.json
+          printf '{"batch":"p0-standard-repository-batch-04","successful_components":%s,"failed_components":%s,"generated_at":"%s"}\n' "$success" "$failed" "$(date -u +%FT%TZ)" > logs/summary.json
           cat logs/summary.json
 
-      - name: Upload repository snapshots
+      - name: Upload standards snapshots
         uses: actions/upload-artifact@v4
         with:
-          name: agi-agent-p0-repository-batch-03
+          name: agi-agent-p0-standard-repository-batch-04
           path: |
             raw/
             logs/
