@@ -10,63 +10,108 @@ permissions:
   contents: read
 
 jobs:
-  ingest-p0-standard-repository-batch-04:
+  recover-p0-repository-batch-03:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {id: '29', module: '07', component: 'Temporal_Documentation', repository: 'temporalio/documentation'}
+          - {id: '30', module: '06', component: 'LlamaIndex', repository: 'run-llama/llama_index'}
+          - {id: '38', module: '10', component: 'SWE_Agent', repository: 'SWE-agent/SWE-agent'}
+          - {id: '39', module: '10', component: 'OpenHands', repository: 'OpenHands/OpenHands'}
+          - {id: '40', module: '11', component: 'SWE_Bench', repository: 'SWE-bench/SWE-bench'}
+          - {id: '50', module: '11', component: 'Terminal_Bench', repository: 'harbor-framework/terminal-bench'}
+          - {id: '52', module: '10', component: 'Mini_SWE_Agent', repository: 'SWE-agent/mini-swe-agent'}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Resolve commits and download standards repositories
+      - name: Resolve immutable commit and verify archive
         shell: bash
         run: |
-          set -uo pipefail
-          mkdir -p raw logs
-          cat > repositories.tsv <<'EOF'
-          2	01	Google_Engineering_Practices	google/eng-practices
-          6	01	OpenAPI_Specification	OAI/OpenAPI-Specification
-          7	01	JSON_Schema_Specification	json-schema-org/json-schema-spec
-          8	08	OpenTelemetry_Semantic_Conventions	open-telemetry/semantic-conventions
-          21	04	AGENTS_md	agentsmd/agents.md
-          35	09	MITRE_ATLAS_Data	mitre-atlas/atlas-data
+          set -euo pipefail
+          mkdir -p work meta payload/direct payload/part-00 payload/part-01 payload/part-02 payload/part-03
+          repo='${{ matrix.repository }}'
+          branch="$(curl -fsSL --retry 5 --retry-all-errors --user-agent 'AGI-KB-Archiver/1.0' "https://api.github.com/repos/${repo}" | jq -r '.default_branch')"
+          commit_sha="$(curl -fsSL --retry 5 --retry-all-errors --user-agent 'AGI-KB-Archiver/1.0' "https://api.github.com/repos/${repo}/commits/${branch}" | jq -r '.sha')"
+          short="${commit_sha:0:12}"
+          filename='${{ matrix.id }}_${{ matrix.component }}_'"${short}.zip"
+          src="work/${filename}"
+          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 2400 --user-agent 'AGI-KB-Archiver/1.0' "https://codeload.github.com/${repo}/zip/${commit_sha}" --output "$src"
+          bytes="$(stat -c%s "$src")"
+          [[ "$(head -c 2 "$src")" == 'PK' ]]
+          [[ "$bytes" -gt 1000 ]]
+          unzip -tq "$src" >/dev/null
+          digest="$(sha256sum "$src" | awk '{print $1}')"
+          printf '%s  %s\n' "$digest" "$filename" > meta/ORIGINAL_SHA256.txt
+          printf '{"id":"%s","module":"%s","component":"%s","repository":"%s","default_branch":"%s","commit_sha":"%s","filename":"%s","bytes":%s,"sha256":"%s","status":"RAW_DOWNLOADED"}\n' \
+            '${{ matrix.id }}' '${{ matrix.module }}' '${{ matrix.component }}' "$repo" "$branch" "$commit_sha" "$filename" "$bytes" "$digest" > meta/manifest.json
+          if [[ "$bytes" -le 250000000 ]]; then
+            cp "$src" payload/direct/
+          else
+            mkdir -p work/parts
+            split -b 250000000 -d -a 2 "$src" "work/parts/${filename}.part-"
+            for part in work/parts/*; do
+              suffix="${part##*.part-}"
+              case "$suffix" in
+                00|01|02|03) cp "$part" "payload/part-${suffix}/" ;;
+                *) echo "Too many parts for configured artifact fanout" >&2; exit 1 ;;
+              esac
+            done
+            sha256sum work/parts/* > meta/PARTS_SHA256.txt
+            cat > meta/README_REASSEMBLE.md <<EOF
+          Original: ${filename}
+          Repository: ${repo}
+          Commit: ${commit_sha}
+          Reassemble: cat ${filename}.part-* > ${filename}
+          Then verify with ORIGINAL_SHA256.txt and unzip -t.
           EOF
+          fi
 
-          printf 'id,module,component,repository,default_branch,commit_sha,filename,status,bytes,sha256,error\n' > logs/repository_manifest.csv
-          : > logs/failures.log
-          success=0; failed=0
-          while IFS=$'\t' read -r id module component repository; do
-            meta="$(curl --fail --silent --show-error --location --retry 5 --retry-all-errors --user-agent 'AGI-KB-Archiver/1.0' "https://api.github.com/repos/${repository}" 2>>logs/failures.log || true)"
-            branch="$(printf '%s' "$meta" | jq -r '.default_branch // empty' 2>/dev/null || true)"
-            if [[ -z "$branch" ]]; then
-              printf '%s,%s,%s,%s,,,,FAILED_RESOLVE,0,,default_branch_missing\n' "$id" "$module" "$component" "$repository" >> logs/repository_manifest.csv; failed=$((failed+1)); continue
-            fi
-            commit_json="$(curl --fail --silent --show-error --location --retry 5 --retry-all-errors --user-agent 'AGI-KB-Archiver/1.0' "https://api.github.com/repos/${repository}/commits/${branch}" 2>>logs/failures.log || true)"
-            commit_sha="$(printf '%s' "$commit_json" | jq -r '.sha // empty' 2>/dev/null || true)"
-            if [[ -z "$commit_sha" ]]; then
-              printf '%s,%s,%s,%s,%s,,,FAILED_RESOLVE,0,,commit_sha_missing\n' "$id" "$module" "$component" "$repository" "$branch" >> logs/repository_manifest.csv; failed=$((failed+1)); continue
-            fi
-            short="${commit_sha:0:12}"; filename="${id}_${component}_${short}.zip"; dest="raw/${module}/${filename}"; tmp="${dest}.part"; mkdir -p "$(dirname "$dest")"
-            url="https://codeload.github.com/${repository}/zip/${commit_sha}"
-            if curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 1800 --user-agent 'AGI-KB-Archiver/1.0' "$url" --output "$tmp"; then
-              bytes="$(stat -c%s "$tmp")"; magic="$(head -c 2 "$tmp" || true)"
-              if [[ "$magic" == 'PK' && "$bytes" -gt 1000 ]] && unzip -tq "$tmp" >/dev/null 2>&1; then
-                mv "$tmp" "$dest"; digest="$(sha256sum "$dest" | awk '{print $1}')"
-                printf '%s,%s,%s,%s,%s,%s,%s,RAW_DOWNLOADED,%s,%s,\n' "$id" "$module" "$component" "$repository" "$branch" "$commit_sha" "$filename" "$bytes" "$digest" >> logs/repository_manifest.csv; success=$((success+1))
-              else
-                rm -f "$tmp"; printf '%s,%s,%s,%s,%s,%s,%s,FAILED_VALIDATION,%s,,invalid_or_corrupt_zip\n' "$id" "$module" "$component" "$repository" "$branch" "$commit_sha" "$filename" "$bytes" >> logs/repository_manifest.csv; failed=$((failed+1))
-              fi
-            else
-              rc=$?; rm -f "$tmp"; printf '%s,%s,%s,%s,%s,%s,%s,FAILED_DOWNLOAD,0,,curl_exit_%s\n' "$id" "$module" "$component" "$repository" "$branch" "$commit_sha" "$filename" "$rc" >> logs/repository_manifest.csv; failed=$((failed+1))
-            fi
-          done < repositories.tsv
-          find raw -type f -print0 | sort -z | xargs -0 -r sha256sum > logs/SHA256SUMS.txt
-          printf '{"batch":"p0-standard-repository-batch-04","successful_components":%s,"failed_components":%s,"generated_at":"%s"}\n' "$success" "$failed" "$(date -u +%FT%TZ)" > logs/summary.json
-          cat logs/summary.json
-
-      - name: Upload standards snapshots
+      - name: Upload direct repository archive
         uses: actions/upload-artifact@v4
         with:
-          name: agi-agent-p0-standard-repository-batch-04
-          path: |
-            raw/
-            logs/
+          name: agi-kb-b03-${{ matrix.id }}-${{ matrix.component }}-direct
+          path: payload/direct/
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 0
+      - name: Upload multipart part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-b03-${{ matrix.id }}-${{ matrix.component }}-part-00
+          path: payload/part-00/
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 0
+      - name: Upload multipart part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-b03-${{ matrix.id }}-${{ matrix.component }}-part-01
+          path: payload/part-01/
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 0
+      - name: Upload multipart part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-b03-${{ matrix.id }}-${{ matrix.component }}-part-02
+          path: payload/part-02/
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 0
+      - name: Upload multipart part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-b03-${{ matrix.id }}-${{ matrix.component }}-part-03
+          path: payload/part-03/
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 0
+      - name: Upload repository metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-b03-${{ matrix.id }}-${{ matrix.component }}-meta
+          path: meta/
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
