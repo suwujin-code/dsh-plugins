@@ -10,85 +10,174 @@ permissions:
   contents: read
 
 jobs:
-  ingest-p1-repositories:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {id: '48', module: '11', component: 'WebArena', repository: 'web-arena-x/webarena'}
-          - {id: '49', module: '11', component: 'OSWorld_V2', repository: 'xlang-ai/OSWorld-V2'}
+  resplit-llamaindex:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Resolve immutable commit and verify archive
+      - name: Download immutable LlamaIndex archive and split below transfer limit
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p payload meta
-          repo='${{ matrix.repository }}'
-          branch="$(curl -fsSL --retry 5 --retry-all-errors --user-agent 'AGI-KB-Archiver/1.0' "https://api.github.com/repos/${repo}" | jq -r '.default_branch')"
-          commit_sha="$(curl -fsSL --retry 5 --retry-all-errors --user-agent 'AGI-KB-Archiver/1.0' "https://api.github.com/repos/${repo}/commits/${branch}" | jq -r '.sha')"
-          short="${commit_sha:0:12}"
-          filename='${{ matrix.id }}_${{ matrix.component }}_'"${short}.zip"
-          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 1800 --user-agent 'AGI-KB-Archiver/1.0' \
-            "https://codeload.github.com/${repo}/zip/${commit_sha}" --output "payload/${filename}"
-          bytes="$(stat -c%s "payload/${filename}")"
-          [[ "$(head -c 2 "payload/${filename}")" == 'PK' ]]
-          [[ "$bytes" -gt 1000 ]]
-          unzip -tq "payload/${filename}" >/dev/null
-          digest="$(sha256sum "payload/${filename}" | awk '{print $1}')"
-          printf '%s  %s\n' "$digest" "$filename" > meta/SHA256SUMS.txt
-          printf '{"id":"%s","module":"%s","component":"%s","repository":"%s","default_branch":"%s","commit_sha":"%s","filename":"%s","bytes":%s,"sha256":"%s","status":"RAW_DOWNLOADED"}\n' \
-            '${{ matrix.id }}' '${{ matrix.module }}' '${{ matrix.component }}' "$repo" "$branch" "$commit_sha" "$filename" "$bytes" "$digest" > meta/manifest.json
-      - name: Upload P1 repository snapshot
+          repo='run-llama/llama_index'
+          commit='56beedf959cbf6356b0a8f5a4f468d066bb5b91f'
+          filename='30_LlamaIndex_56beedf959cb.zip'
+          expected='9ee8a8da13e00bc8d836e99e1b4211f281bec33fb6b8fa87858702f9697ca1bd'
+          mkdir -p work/parts meta
+          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 2400 \
+            --user-agent 'AGI-KB-Archiver/1.0' \
+            "https://codeload.github.com/${repo}/zip/${commit}" --output "work/${filename}"
+          [[ "$(head -c 2 "work/${filename}")" == 'PK' ]]
+          unzip -tq "work/${filename}" >/dev/null
+          actual="$(sha256sum "work/${filename}" | awk '{print $1}')"
+          [[ "$actual" == "$expected" ]]
+          split -b 80000000 -d -a 2 "work/${filename}" "work/parts/${filename}.part-"
+          [[ "$(find work/parts -type f | wc -l)" -eq 4 ]]
+          find work/parts -type f -print0 | sort -z | xargs -0 sha256sum > meta/PARTS_SHA256.txt
+          printf '%s  %s\n' "$actual" "$filename" > meta/ORIGINAL_SHA256.txt
+          cat > meta/README_REASSEMBLE.md <<EOF
+          Original: ${filename}
+          Repository: ${repo}
+          Commit: ${commit}
+          Reassemble: cat ${filename}.part-* > ${filename}
+          Verify SHA256: ${expected}
+          EOF
+          printf '{"id":"30","module":"06","repository":"%s","commit_sha":"%s","filename":"%s","bytes":%s,"sha256":"%s","part_size":80000000,"part_count":4,"status":"RAW_DOWNLOADED"}\n' \
+            "$repo" "$commit" "$filename" "$(stat -c%s "work/${filename}")" "$actual" > meta/manifest.json
+      - name: Upload LlamaIndex part 00
         uses: actions/upload-artifact@v4
         with:
-          name: agi-kb-p1-${{ matrix.id }}-${{ matrix.component }}
-          path: |
-            payload/
-            meta/
+          name: agi-kb-resplit-30-part-00
+          path: work/parts/30_LlamaIndex_56beedf959cb.zip.part-00
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload LlamaIndex part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-resplit-30-part-01
+          path: work/parts/30_LlamaIndex_56beedf959cb.zip.part-01
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload LlamaIndex part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-resplit-30-part-02
+          path: work/parts/30_LlamaIndex_56beedf959cb.zip.part-02
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload LlamaIndex part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-resplit-30-part-03
+          path: work/parts/30_LlamaIndex_56beedf959cb.zip.part-03
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload LlamaIndex metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-resplit-30-meta
+          path: meta/
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
 
-  archive-p1-bfcl:
+  resplit-terminal-bench:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
-      - name: Capture BFCL leaderboard source
+      - name: Download immutable Terminal-Bench archive and split below transfer limit
         shell: bash
         run: |
-          set -uo pipefail
-          id='51'; module='11'; slug='BFCL_V4_Leaderboard'; url='https://gorilla.cs.berkeley.edu/leaderboard.html'
-          root="capture/${id}_${slug}"
-          mkdir -p "$root/raw" "$root/rendered" "$root/meta" payload
-          curl_meta="$(curl --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 300 \
-            --user-agent 'Mozilla/5.0 AGI-KB-Archiver/1.0' --dump-header "$root/raw/response_headers.txt" \
-            --output "$root/raw/raw_response.html" --write-out '%{http_code}\t%{url_effective}' "$url" 2>"$root/meta/curl_error.log" || true)"
-          http_code="${curl_meta%%$'\t'*}"; final_url="${curl_meta#*$'\t'}"
-          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
-          if [[ -n "$browser" ]]; then
-            timeout 180 "$browser" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --virtual-time-budget=20000 --dump-dom "$url" > "$root/rendered/rendered_dom.html" 2>"$root/meta/browser_dom_error.log" || true
-            timeout 240 "$browser" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --virtual-time-budget=20000 --print-to-pdf="$root/rendered/rendered_page.pdf" "$url" > "$root/meta/browser_pdf_stdout.log" 2>"$root/meta/browser_pdf_error.log" || true
-          fi
-          raw_bytes="$(stat -c%s "$root/raw/raw_response.html" 2>/dev/null || echo 0)"
-          dom_bytes="$(stat -c%s "$root/rendered/rendered_dom.html" 2>/dev/null || echo 0)"
-          pdf_bytes="$(stat -c%s "$root/rendered/rendered_page.pdf" 2>/dev/null || echo 0)"
-          if [[ "$pdf_bytes" -gt 0 && "$(head -c 5 "$root/rendered/rendered_page.pdf" || true)" != '%PDF-' ]]; then rm -f "$root/rendered/rendered_page.pdf"; pdf_bytes=0; fi
-          if [[ "$http_code" == '200' && ( "$raw_bytes" -gt 500 || "$dom_bytes" -gt 1000 || "$pdf_bytes" -gt 10000 ) ]]; then status='RAW_DOWNLOADED'; else status='FAILED_CAPTURE'; fi
-          find "$root" -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 -r sha256sum > "$root/meta/SHA256SUMS.txt"
-          bundle="payload/${id}_${slug}_OFFICIAL_WEB_SNAPSHOT.zip"
-          zip -qr "$bundle" "$root"; unzip -tq "$bundle" >/dev/null
-          bytes="$(stat -c%s "$bundle")"; digest="$(sha256sum "$bundle" | awk '{print $1}')"
-          printf 'id,module,slug,url,status,http_code,final_url,raw_bytes,rendered_dom_bytes,rendered_pdf_bytes,bundle_bytes,bundle_sha256\n' > payload/capture_manifest.csv
-          printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$id" "$module" "$slug" "$url" "$status" "$http_code" "$final_url" "$raw_bytes" "$dom_bytes" "$pdf_bytes" "$bytes" "$digest" >> payload/capture_manifest.csv
-          printf '%s  %s\n' "$digest" "$(basename "$bundle")" > payload/BUNDLE_SHA256.txt
-          cat payload/capture_manifest.csv
-      - name: Upload BFCL official web snapshot
+          set -euo pipefail
+          repo='harbor-framework/terminal-bench'
+          commit='f1a5d1bbc75d53a819defb334d8a62b3da3e421a'
+          filename='50_Terminal_Bench_f1a5d1bbc75d.zip'
+          expected='9293abf7abcf9517e382ee4638be229492a6625374ae1d6fbd515502487d363d'
+          mkdir -p work/parts meta
+          curl --fail --location --retry 5 --retry-all-errors --connect-timeout 30 --max-time 2400 \
+            --user-agent 'AGI-KB-Archiver/1.0' \
+            "https://codeload.github.com/${repo}/zip/${commit}" --output "work/${filename}"
+          [[ "$(head -c 2 "work/${filename}")" == 'PK' ]]
+          unzip -tq "work/${filename}" >/dev/null
+          actual="$(sha256sum "work/${filename}" | awk '{print $1}')"
+          [[ "$actual" == "$expected" ]]
+          split -b 80000000 -d -a 2 "work/${filename}" "work/parts/${filename}.part-"
+          [[ "$(find work/parts -type f | wc -l)" -eq 7 ]]
+          find work/parts -type f -print0 | sort -z | xargs -0 sha256sum > meta/PARTS_SHA256.txt
+          printf '%s  %s\n' "$actual" "$filename" > meta/ORIGINAL_SHA256.txt
+          cat > meta/README_REASSEMBLE.md <<EOF
+          Original: ${filename}
+          Repository: ${repo}
+          Commit: ${commit}
+          Reassemble: cat ${filename}.part-* > ${filename}
+          Verify SHA256: ${expected}
+          EOF
+          printf '{"id":"50","module":"11","repository":"%s","commit_sha":"%s","filename":"%s","bytes":%s,"sha256":"%s","part_size":80000000,"part_count":7,"status":"RAW_DOWNLOADED"}\n' \
+            "$repo" "$commit" "$filename" "$(stat -c%s "work/${filename}")" "$actual" > meta/manifest.json
+      - name: Upload Terminal-Bench part 00
         uses: actions/upload-artifact@v4
         with:
-          name: agi-kb-p1-51-BFCL_V4_Leaderboard
-          path: payload/
+          name: agi-kb-resplit-50-part-00
+          path: work/parts/50_Terminal_Bench_f1a5d1bbc75d.zip.part-00
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload Terminal-Bench part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-resplit-50-part-01
+          path: work/parts/50_Terminal_Bench_f1a5d1bbc75d.zip.part-01
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload Terminal-Bench part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-resplit-50-part-02
+          path: work/parts/50_Terminal_Bench_f1a5d1bbc75d.zip.part-02
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload Terminal-Bench part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-resplit-50-part-03
+          path: work/parts/50_Terminal_Bench_f1a5d1bbc75d.zip.part-03
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload Terminal-Bench part 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-resplit-50-part-04
+          path: work/parts/50_Terminal_Bench_f1a5d1bbc75d.zip.part-04
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload Terminal-Bench part 05
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-resplit-50-part-05
+          path: work/parts/50_Terminal_Bench_f1a5d1bbc75d.zip.part-05
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload Terminal-Bench part 06
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-resplit-50-part-06
+          path: work/parts/50_Terminal_Bench_f1a5d1bbc75d.zip.part-06
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Upload Terminal-Bench metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: agi-kb-resplit-50-meta
+          path: meta/
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
